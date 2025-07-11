@@ -4,3 +4,5 @@ What I am currently doing (this may kinda read like a blog, I apologize in advan
 
 Benchmarking qualitative vs quantitative questions and seeing average gradient magnitudes.
 This will hopefully allow me to quantize seemingly non important layers as I go on.
+
+![fig1](https://github.com/AyanJhunjhunwala/ContextQ/blob/main/Figure_1.png "Initial Finding")
