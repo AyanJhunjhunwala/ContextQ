@@ -15,23 +15,13 @@ class GradientAnalyzer:
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
         
-        if self.device.type == "cuda":
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                torch_dtype=torch.bfloat16,
-                device_map="auto",
-                trust_remote_code=True
-            )
-        else:
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                torch_dtype=torch.float32,
-                trust_remote_code=True
-            ).to(self.device)
-        
-        total_params = sum(p.numel() for p in model.parameters())
-        print(f"Model loaded: {total_params:,} parameters")
-        return model, tokenizer
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float32,
+            device_map="auto",
+            trust_remote_code=True
+        )
+
     
     def compute_gradients(self, input_ids, target_token_pos):
         self.model.eval()
@@ -49,9 +39,9 @@ class GradientAnalyzer:
         
         handles = []
         
-        # Register hooks based on architecture
+        #Register hooks based on architecture
         if hasattr(self.model, 'model') and hasattr(self.model.model, 'layers'):
-            # Llama-style architecture
+            # Llama-style
             for i, layer in enumerate(self.model.model.layers):
                 if hasattr(layer, 'self_attn') and hasattr(layer.self_attn, 'o_proj'):
                     handles.append(layer.self_attn.o_proj.register_full_backward_hook(
@@ -61,7 +51,7 @@ class GradientAnalyzer:
                         gradient_hook(f'layer_{i}_ffn')))
                         
         elif hasattr(self.model, 'transformer') and hasattr(self.model.transformer, 'h'):
-            # GPT-style architecture
+            # GPT-style
             for i, layer in enumerate(self.model.transformer.h):
                 if hasattr(layer, 'attn'):
                     handles.append(layer.attn.register_full_backward_hook(
@@ -70,7 +60,7 @@ class GradientAnalyzer:
                     handles.append(layer.mlp.register_full_backward_hook(
                         gradient_hook(f'layer_{i}_mlp')))
         else:
-            # Generic approach
+            # Generic 
             layer_count = 0
             for name, module in self.model.named_modules():
                 if isinstance(module, torch.nn.Linear) and 'lm_head' not in name:
