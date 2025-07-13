@@ -21,6 +21,7 @@ class GradientAnalyzer:
             device_map="auto",
             trust_remote_code=True
         )
+        return model, tokenizer
 
     
     def compute_gradients(self, input_ids, target_token_pos):
