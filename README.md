@@ -32,4 +32,8 @@ This is just me keeping up with any progress I made.
 
 # 13th July 2025
 
-The attention patterns and gradient magnitude are obviously pretty different for quant/qual in dialo-small. I am planning to test this with a larger model.
+The attention patterns and gradient magnitude are obviously pretty different for quant/qual in dialo-small. I am planning to test this with a larger model. I tested out dialo with the ARC and GSM8k test. (below)
+
+![fig2](https://github.com/AyanJhunjhunwala/ContextQ/blob/main/Figure_2.png)
+
+I am going to switch over to llama 3.1 and benchmark 8-4 bit next. I am also going to work on attention patterns and quant strutcures for both quant/qual. This means a lot of reading for me :( 
