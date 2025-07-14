@@ -1,3 +1,9 @@
 Benchmark on GSM8k and ARC/ETHICS Dataset
 Work on Wrapper stuff -> barebones structure
-Try bigger models through LLAMA cloud
+
+
+FOCUS on 8 bit -> 4 bit and more with llama 3.1 8B without any signiificant performance loss
+
+Start with 2 classifications, adjust attention patterns and quantize layers.(llama 3.1 8b, 8,4)
+
+Build the wrapper and learn.
