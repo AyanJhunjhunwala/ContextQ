@@ -7,6 +7,7 @@ This will hopefully allow me to quantize seemingly non important layers as I go 
 
 ![fig1](https://github.com/AyanJhunjhunwala/ContextQ/blob/main/Figure_1.png "Initial Finding")
 
+# Is the wrapper out? -> No
 
 # Observations
 
@@ -23,3 +24,12 @@ Very initial but we see that atleast for the DiaboGPT-small model, the gradient 
 # More thoughts
 
 This is an extremely long project and I hope to be done with a prototype soon and continue working on it as long as I can. 
+
+
+# Day by Day
+
+This is just me keeping up with any progress I made.
+
+# 13th July 2025
+
+The attention patterns and gradient magnitude are obviously pretty different for quant/qual in dialo-small. I am planning to test this with a larger model.
