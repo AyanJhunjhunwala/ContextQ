@@ -1,4 +1,4 @@
-# Python Library Wrapper for Intelligent Context Aware Quantization
+# Context-Aware Model Wrapper for Selective Quantization/Pruning and editing Attention Patterns
 
 What I am currently doing (this may kinda read like a blog, I apologize in advance).
 
