@@ -46,7 +46,7 @@ I am thinking of using github blogs for this but probably won't. So I ran the ll
 
 A comprehensive analysis of 8-bit vs 4-bit quantization effects on transformer model performance across different reasoning tasks.
 
-## 📊 Performance Summary
+## Performance Summary
 
 | Task | Model Type | Accuracy | Correct/Total | Speed (samples/s) | Time (min) |
 |------|------------|----------|---------------|-------------------|------------|
@@ -60,7 +60,7 @@ A comprehensive analysis of 8-bit vs 4-bit quantization effects on transformer m
 - **SVAMP**: Unexpected accuracy improvement (1.28%) with 73% speed improvement
 - **Overall**: 4-bit quantization provides significant inference speedup with task-dependent accuracy effects
 
-## 🔍 Layer-wise Analysis
+## Layer-wise Analysis
 
 ### ARC-Easy (Multiple Choice Reasoning)
 
@@ -164,5 +164,5 @@ A comprehensive analysis of 8-bit vs 4-bit quantization effects on transformer m
 
 ---
 
-*Analysis based on transformer model evaluation across ARC-Easy and SVAMP benchmarks with 8-bit and 4-bit quantization schemes.*
+
 
