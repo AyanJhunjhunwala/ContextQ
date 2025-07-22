@@ -2,12 +2,11 @@ Benchmark on GSM8k and ARC/ETHICS Dataset
 Work on Wrapper stuff -> barebones structure
 
 
-FOCUS on 8 bit -> 4 bit and more with llama 3.1 8B without any signiificant performance loss (run benchmarks)
-
-Start with 2 classifications()
-
-
-
-adjust attention patterns and quantize layers.(llama 3.1 8b, 8,4)
+Figure out how to wrap so that attention patterns for models are figured.FloatingPointError
+    
+Maybe have a pipeline:
+1. load model into contextQ,
+2. let it analyze the model and specific layers,
+3. auto adjust based on attention patterns(do this only for llama so far)
 
 Build the wrapper and learn.

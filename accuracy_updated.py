@@ -47,27 +47,10 @@ import pickle
 from datetime import datetime
 warnings.filterwarnings("ignore")
 
-# Check device and warn about CUDA status
-try:
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"\n🖥️  Using device: {device}")
-    if device == "cpu":
-        print("⚠️  WARNING: Running on CPU - this will be much slower than GPU")
-        print("   Consider installing CUDA-enabled PyTorch for better performance")
-except Exception as e:
-    print(f"⚠️  PyTorch device detection failed: {e}")
-    device = "cpu"
-    print("🖥️  Defaulting to CPU mode")
-
 # Create output directory for analysis data
 output_dir = "quantization_analysis"
 os.makedirs(output_dir, exist_ok=True)
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-print(f"\n🎯 COMPREHENSIVE QUANTIZATION ANALYSIS")
-print(f"🖥️  Device: {device}")
-print(f"📁 Output directory: {output_dir}")
-print(f"⏰ Timestamp: {timestamp}")
 
 # Load datasets with SVAMP input filtering from test_svamp_llama4bit.py
 print("Loading datasets...")
@@ -119,6 +102,27 @@ def extract_answer_from_text(text):
             pass
     
     return None
+
+def evaluate_gsm8k_answer(generated_answer, correct_answer):
+    """Evaluate GSM8K answer by extracting final numerical value"""
+    # Extract correct answer
+    correct_num = re.findall(r'#### ([+-]?\d+(?:\.\d+)?)', correct_answer)
+    if not correct_num:
+        return False
+    
+    try:
+        correct_num = float(correct_num[0])
+    except (ValueError, IndexError):
+        return False
+    
+    # Extract generated answer
+    generated_num = extract_answer_from_text(generated_answer)
+    
+    if generated_num is None:
+        return False
+    
+    # Allow small floating point differences
+    return abs(generated_num - correct_num) < 0.01
 
 def evaluate_arc_answer(generated_answer, correct_answer):
     """Evaluate ARC answer by looking for the correct choice"""
@@ -308,14 +312,11 @@ class QuantizationAnalyzer:
         head_correlations = []
         for i in range(num_heads):
             for j in range(i+1, num_heads):
-                try:
-                    corr = torch.corrcoef(torch.stack([
-                        attention_weights[:, i, :, :].flatten(),
-                        attention_weights[:, j, :, :].flatten()
-                    ]))[0, 1]
-                    head_correlations.append(float(corr) if not torch.isnan(corr) else 0.0)
-                except:
-                    head_correlations.append(0.0)
+                corr = torch.corrcoef(torch.stack([
+                    attention_weights[:, i, :, :].flatten(),
+                    attention_weights[:, j, :, :].flatten()
+                ]))[0, 1]
+                head_correlations.append(float(corr) if not torch.isnan(corr) else 0.0)
         
         return {
             'head_variance': head_variance.tolist(),
@@ -359,15 +360,12 @@ class QuantizationAnalyzer:
             batch_correlations = []
             for i in range(attention_weights.shape[0]):
                 for j in range(i+1, attention_weights.shape[0]):
-                    try:
-                        corr = torch.corrcoef(torch.stack([
-                            attention_weights[i].flatten(),
-                            attention_weights[j].flatten()
-                        ]))[0, 1]
-                        if not torch.isnan(corr):
-                            batch_correlations.append(float(corr))
-                    except:
-                        pass
+                    corr = torch.corrcoef(torch.stack([
+                        attention_weights[i].flatten(),
+                        attention_weights[j].flatten()
+                    ]))[0, 1]
+                    if not torch.isnan(corr):
+                        batch_correlations.append(float(corr))
             
             return np.mean(batch_correlations) if batch_correlations else 0.0
         return 1.0
@@ -408,6 +406,229 @@ class QuantizationAnalyzer:
         for hook in self.hooks:
             hook.remove()
         self.hooks.clear()
+
+def setup_attention_hooks(model, layer_indices=None, head_indices=None):
+    """Legacy function - now uses QuantizationAnalyzer"""
+    analyzer = QuantizationAnalyzer("legacy", output_dir, timestamp)
+    layer_indices, head_indices = analyzer.setup_comprehensive_hooks(model, layer_indices, head_indices)
+    return analyzer.attention_data, analyzer.layer_activations, analyzer.hooks, layer_indices, head_indices
+
+def analyze_attention_patterns(attention_data, layer_outputs, tokenizer, input_ids, layer_indices, head_indices, dataset_name):
+    """Analyze attention patterns and their relationship to reasoning quality"""
+    analysis = {}
+    
+    for layer_idx in layer_indices:
+        layer_analysis = {}
+        
+        # Analyze layer representations
+        if layer_idx in layer_outputs:
+            hidden_states = layer_outputs[layer_idx]
+            batch_size, seq_len, hidden_size = hidden_states.shape
+            last_token_repr = hidden_states[:, -1, :]
+            
+            layer_analysis.update({
+                'mean_activation': float(last_token_repr.mean()),
+                'std_activation': float(last_token_repr.std()),
+                'sparsity': float((last_token_repr == 0).float().mean()),
+                'magnitude': float(torch.norm(last_token_repr, dim=1).mean()),
+                'representation_rank': estimate_rank(last_token_repr),
+            })
+        
+        # Analyze attention patterns
+        attention_key = f'layer_{layer_idx}_attention'
+        if attention_key in attention_data:
+            attention_weights = attention_data[attention_key]  # [batch, heads, seq_len, seq_len]
+            
+            if attention_weights.dim() == 4:
+                batch_size, num_heads, seq_len, _ = attention_weights.shape
+                
+                # Focus on specific heads that are important for reasoning
+                target_heads = [h for h in head_indices if h < num_heads]
+                
+                head_analyses = {}
+                for head_idx in target_heads:
+                    head_attn = attention_weights[:, head_idx, :, :]  # [batch, seq_len, seq_len]
+                    
+                    # Calculate attention metrics for this head
+                    head_analyses[head_idx] = {
+                        # Attention concentration (how focused vs diffuse)
+                        'entropy': float(-torch.sum(head_attn * torch.log(head_attn + 1e-12), dim=-1).mean()),
+                        
+                        # Self-attention vs cross-attention patterns
+                        'self_attention_ratio': float(torch.diagonal(head_attn, dim1=-2, dim2=-1).mean()),
+                        
+                        # Last token attention (important for generation)
+                        'last_token_attention': float(head_attn[:, -1, :].mean()),
+                        
+                        # Attention span (how far back the model looks)
+                        'attention_span': calculate_attention_span(head_attn),
+                        
+                        # Question-to-answer attention flow
+                        'qa_attention_flow': calculate_qa_attention_flow(head_attn, seq_len, dataset_name),
+                        
+                        # Attention sharpness (peakiness of attention distribution)
+                        'attention_sharpness': float(torch.max(head_attn, dim=-1)[0].mean()),
+                    }
+                
+                layer_analysis['attention_heads'] = head_analyses
+                
+                # Layer-level attention aggregates
+                layer_analysis.update({
+                    'avg_attention_entropy': np.mean([h['entropy'] for h in head_analyses.values()]),
+                    'avg_attention_sharpness': np.mean([h['attention_sharpness'] for h in head_analyses.values()]),
+                    'avg_attention_span': np.mean([h['attention_span'] for h in head_analyses.values()]),
+                    'reasoning_attention_score': calculate_reasoning_attention_score(head_analyses, dataset_name)
+                })
+        
+        analysis[layer_idx] = layer_analysis
+    
+    return analysis
+
+def calculate_attention_span(attention_weights):
+    """Calculate the effective span of attention (how far back the model looks)"""
+    batch_size, seq_len, _ = attention_weights.shape
+    positions = torch.arange(seq_len).float().unsqueeze(0).unsqueeze(0)
+    
+    # Calculate weighted average position for each query
+    weighted_positions = torch.sum(attention_weights * positions, dim=-1)
+    query_positions = torch.arange(seq_len).float().unsqueeze(0)
+    
+    # Attention span as difference between query position and attended position
+    spans = query_positions - weighted_positions
+    return float(spans.mean())
+
+def calculate_qa_attention_flow(attention_weights, seq_len, dataset_name):
+    """Calculate how well attention flows from question to answer components"""
+    if dataset_name == "ARC":
+        # For ARC: Look for attention to choice tokens and reasoning words
+        # Assume question is in first 70% of sequence, choices in last 30%
+        question_end = int(seq_len * 0.7)
+        choice_start = question_end
+        
+        # Attention from choice region back to question region
+        qa_flow = attention_weights[:, choice_start:, :question_end].mean()
+        
+    else:  # SVAMP
+        # For SVAMP: Look for attention to numbers and mathematical operations
+        # Focus on last token attention to mathematical content (assumed early in sequence)
+        math_region_end = int(seq_len * 0.6)
+        qa_flow = attention_weights[:, -1, :math_region_end].mean()
+    
+    return float(qa_flow)
+
+def calculate_reasoning_attention_score(head_analyses, dataset_name):
+    """Calculate a composite score indicating reasoning quality of attention patterns"""
+    if not head_analyses:
+        return 0.0
+    
+    if dataset_name == "ARC":
+        # For ARC: Reward focused attention, good QA flow, moderate entropy
+        score = 0
+        for head_data in head_analyses.values():
+            # Balanced entropy (not too high, not too low)
+            entropy_score = 1.0 - abs(head_data['entropy'] - 2.5) / 2.5
+            # High QA attention flow
+            qa_score = head_data['qa_attention_flow']
+            # Sharp attention for choices
+            sharpness_score = min(head_data['attention_sharpness'], 1.0)
+            
+            score += (entropy_score + qa_score + sharpness_score) / 3
+            
+    else:  # SVAMP
+        # For SVAMP: Reward mathematical reasoning patterns
+        score = 0
+        for head_data in head_analyses.values():
+            # Lower entropy for focused mathematical attention
+            entropy_score = max(0, 1.0 - head_data['entropy'] / 3.0)
+            # Good mathematical attention flow
+            qa_score = head_data['qa_attention_flow']
+            # Moderate attention span for multi-step problems
+            span_score = 1.0 - abs(head_data['attention_span'] - 5.0) / 10.0
+            
+            score += (entropy_score + qa_score + span_score) / 3
+    
+    return score / len(head_analyses)
+
+def estimate_rank(tensor, threshold=1e-6):
+    """Estimate the effective rank of tensor representations"""
+    try:
+        # Use SVD to estimate rank
+        U, S, V = torch.svd(tensor.float())
+        rank = (S > threshold).sum().item()
+        return rank
+    except:
+        return -1  # Return -1 if SVD fails
+
+def remove_hooks(hooks):
+    """Remove all registered hooks"""
+    for hook in hooks:
+        hook.remove()
+
+def generate_with_analysis(model, tokenizer, prompts, layer_indices, head_indices, dataset_name):
+    """Generate responses while capturing comprehensive layer and attention analysis"""
+    try:
+        # Setup hooks for both layers and attention
+        attention_data, layer_outputs, hooks, actual_layer_indices, actual_head_indices = setup_attention_hooks(
+            model, layer_indices, head_indices
+        )
+        
+        # Tokenize batch
+        inputs = tokenizer(
+            prompts, 
+            return_tensors='pt', 
+            truncation=True, 
+            max_length=400,
+            padding=True,
+            pad_to_multiple_of=8
+        )
+        
+        # Move to device
+        if torch.cuda.is_available() and hasattr(model, 'device'):
+            inputs = {k: v.to(model.device) for k, v in inputs.items()}
+        
+        # Clear previous data
+        attention_data.clear()
+        layer_outputs.clear()
+        
+        # Generate with comprehensive capture
+        with torch.no_grad():
+            outputs = model.generate(
+                input_ids=inputs['input_ids'],
+                attention_mask=inputs['attention_mask'],
+                max_new_tokens=50,
+                num_return_sequences=1,
+                pad_token_id=tokenizer.eos_token_id,
+                do_sample=False,
+                use_cache=True,
+                eos_token_id=tokenizer.eos_token_id,
+                output_attentions=True,  # Enable attention output
+                return_dict_in_generate=True
+            )
+        
+        # Analyze patterns
+        analysis = analyze_attention_patterns(
+            attention_data, layer_outputs, tokenizer, inputs['input_ids'], 
+            actual_layer_indices, actual_head_indices, dataset_name
+        )
+        
+        # Decode responses
+        generated_answers = []
+        for i, output in enumerate(outputs.sequences):
+            response = tokenizer.decode(output, skip_special_tokens=True)
+            original_prompt = prompts[i]
+            generated_answer = response[len(original_prompt):].strip()
+            generated_answers.append(generated_answer)
+        
+        # Remove hooks
+        remove_hooks(hooks)
+        
+        return generated_answers, analysis
+        
+    except Exception as e:
+        print(f"Error in comprehensive analysis generation: {e}")
+        if 'hooks' in locals():
+            remove_hooks(hooks)
+        return [None] * len(prompts), {}
 
 def process_batch_with_layers(model, tokenizer, batch_questions, dataset_name, layer_indices, head_indices, batch_size=8, analyzer=None, sample_start_idx=0, bits=None):
     """Process batch with comprehensive layer and attention analysis"""
@@ -485,11 +706,264 @@ def process_batch_with_layers(model, tokenizer, batch_questions, dataset_name, l
             
             return generated_answers, analysis
         else:
-            return [None] * len(batch_questions), {}
+            # Generate with comprehensive analysis (legacy mode)
+            generated_answers, analysis = generate_with_analysis(
+                model, tokenizer, prompts, layer_indices, head_indices, dataset_name
+            )
+            
+            return generated_answers, analysis
         
     except Exception as e:
         print(f"Error processing batch with comprehensive analysis: {e}")
         return [None] * len(batch_questions), {}
+
+def run_benchmark_with_quantization(questions_list, answers_list, num_samples, dataset_name, bits, batch_size=8, enable_layer_analysis=True):
+    """Run benchmark with specified quantization level, batch processing, and layer analysis"""
+    print(f"\nRunning {dataset_name} benchmark with {bits}-bit precision (batch size: {batch_size})...")
+    if enable_layer_analysis:
+        print("Layer-wise analysis: ENABLED")
+    start_time = time.time()
+    
+    model_name = "meta-llama/Llama-3.1-8B-Instruct"
+    
+    # Initialize comprehensive analyzer
+    analyzer = QuantizationAnalyzer(model_name, output_dir, timestamp) if enable_layer_analysis else None
+    
+    try:
+        # Configure quantization based on bits (changed from 8,4 to 4,2)
+        if bits == 4:
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4"
+            )
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                quantization_config=quantization_config,
+                device_map="auto",
+                torch_dtype=torch.float16,
+                trust_remote_code=True,
+                use_auth_token=True,
+                low_cpu_mem_usage=True
+            )
+        elif bits == 2:
+            # 2-bit quantization configuration
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,  # Use 4bit infrastructure for 2bit
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4"
+            )
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                quantization_config=quantization_config,
+                device_map="auto",
+                torch_dtype=torch.float16,
+                trust_remote_code=True,
+                use_auth_token=True,
+                low_cpu_mem_usage=True
+            )
+        else:
+            raise ValueError(f"Unsupported bit size: {bits}")
+        
+        print(f"Model loaded successfully")
+        
+        # Determine layer indices for analysis (strategic selection)
+        total_layers = len(model.model.layers)
+        layer_indices = [
+            0,                              # Input processing
+            total_layers // 8,              # Early reasoning (12.5%)
+            total_layers // 4,              # Question understanding (25%)
+            total_layers // 2,              # Core reasoning (50%)
+            3 * total_layers // 4,          # Answer synthesis (75%)
+            total_layers - 1                # Output generation (100%)
+        ]
+        
+        # Strategic attention head selection (often these heads specialize)
+        head_indices = [0, 4, 8, 12, 16, 20, 24, 28]  # Key reasoning heads
+        
+        print(f"Total layers: {total_layers}, analyzing layers: {layer_indices}")
+        print(f"Analyzing attention heads: {head_indices}")
+        
+        # Load tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        
+        # Initialize counters and layer tracking
+        correct = 0
+        total = min(num_samples, len(questions_list)) if num_samples > 0 else len(questions_list)
+        errors = 0
+        layer_stats = defaultdict(list)  # Collect stats for each layer
+        
+        # Limit comprehensive analysis to first 100 samples for detailed recording
+        analysis_limit = min(100, total) if enable_layer_analysis else 0
+        
+        print(f"Processing {total} samples in batches of {batch_size}...")
+        print(f"Comprehensive analysis will be saved for first {analysis_limit} samples")
+        
+        # Process samples in batches
+        for i in range(0, total, batch_size):
+            batch_end = min(i + batch_size, total)
+            batch_questions = questions_list[i:batch_end]
+            batch_correct_answers = answers_list[i:batch_end] if i < len(answers_list) else [""] * len(batch_questions)
+            
+            try:
+                if enable_layer_analysis and i < analysis_limit:
+                    # Process batch with comprehensive analysis and data recording
+                    batch_generated_answers, comprehensive_analysis = process_batch_with_layers(
+                        model, tokenizer, batch_questions, dataset_name, layer_indices, head_indices, 
+                        batch_size, analyzer, i, bits
+                    )
+                    
+                    # Collect layer and attention statistics
+                    for sample_idx, stats in comprehensive_analysis.items():
+                        if 'layer_activations' in stats:
+                            for layer_idx, layer_data in stats['layer_activations'].items():
+                                layer_stats[layer_idx].append(layer_data)
+                        
+                else:
+                    # Process batch normally (faster)
+                    batch_generated_answers = process_batch_standard(model, tokenizer, batch_questions, dataset_name, batch_size)
+                
+                # Evaluate batch results
+                for j, (generated_answer, correct_answer) in enumerate(zip(batch_generated_answers, batch_correct_answers)):
+                    if generated_answer is None:
+                        errors += 1
+                        continue
+                    
+                    # Evaluate answer
+                    if dataset_name == "ARC":
+                        is_correct = evaluate_arc_answer(generated_answer, correct_answer)
+                    else:  # SVAMP
+                        is_correct = evaluate_svamp_answer(generated_answer, correct_answer)
+                    
+                    if is_correct:
+                        correct += 1
+                        
+            except Exception as batch_error:
+                errors += len(batch_questions)
+                if errors <= 20:  # Print first few batch errors
+                    print(f"Error processing batch {i//batch_size + 1}: {batch_error}")
+                continue
+            
+            # Progress updates
+            processed = min(batch_end, total)
+            if processed % (batch_size * 10) == 0 or processed == total:
+                current_acc = correct / processed if processed > 0 else 0
+                elapsed = time.time() - start_time
+                avg_time = elapsed / processed
+                eta = avg_time * (total - processed)
+                samples_per_sec = processed / elapsed if elapsed > 0 else 0
+                
+                print(f"Progress: {processed}/{total} ({processed/total*100:.1f}%) | "
+                      f"Accuracy: {current_acc:.3f} | "
+                      f"Errors: {errors} | "
+                      f"Speed: {samples_per_sec:.1f} samples/s | "
+                      f"ETA: {eta/60:.1f}m")
+        
+        # Calculate final results
+        accuracy = correct / total if total > 0 else 0.0
+        elapsed_time = time.time() - start_time
+        
+        # Save comprehensive experiment summary
+        experiment_summary = {
+            'timestamp': timestamp,
+            'dataset': dataset_name,
+            'bits': bits,
+            'model_name': model_name,
+            'total_samples': total,
+            'correct': correct,
+            'accuracy': accuracy,
+            'errors': errors,
+            'elapsed_time': elapsed_time,
+            'layer_indices': layer_indices,
+            'head_indices': head_indices,
+            'analysis_limit': analysis_limit,
+            'quantization_config': {
+                'load_in_4bit': bits in [2, 4],
+                'bnb_4bit_compute_dtype': 'float16',
+                'bnb_4bit_use_double_quant': True,
+                'bnb_4bit_quant_type': 'nf4'
+            }
+        }
+        
+        summary_file = f"{output_dir}/experiment_summary_{dataset_name}_{bits}bit_{timestamp}.json"
+        with open(summary_file, 'w') as f:
+            json.dump(experiment_summary, f, indent=2)
+        print(f"Saved experiment summary to {summary_file}")
+        
+        # Aggregate comprehensive statistics
+        aggregated_layer_stats = {}
+        for layer_idx, stats_list in layer_stats.items():
+            if stats_list:
+                # Basic layer stats
+                layer_data = {
+                    'mean_activation': np.mean([s.get('mean_activation', 0) for s in stats_list]),
+                    'std_activation': np.mean([s.get('std_activation', 0) for s in stats_list]),
+                    'sparsity': np.mean([s.get('sparsity', 0) for s in stats_list]),
+                    'magnitude': np.mean([s.get('magnitude', 0) for s in stats_list]),
+                    'samples_analyzed': len(stats_list)
+                }
+                
+                aggregated_layer_stats[layer_idx] = layer_data
+        
+        print(f"\n{dataset_name} - {bits}-bit Results:")
+        print(f"  Total Samples: {total}")
+        print(f"  Correct: {correct}")
+        print(f"  Errors: {errors}")
+        print(f"  Accuracy: {accuracy:.4f}")
+        print(f"  Time: {elapsed_time/60:.2f} minutes")
+        print(f"  Avg Time/Sample: {elapsed_time/total:.2f}s")
+        print(f"  Samples/Second: {total/elapsed_time:.2f}")
+        print(f"  Comprehensive analysis saved for {analysis_limit} samples")
+        
+        # Cleanup analyzer
+        if analyzer:
+            analyzer.remove_hooks()
+        
+        # Memory cleanup
+        del model
+        del tokenizer
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            print(f"  GPU Memory Cleared")
+            
+        return {
+            'accuracy': accuracy,
+            'correct': correct,
+            'total': total,
+            'errors': errors,
+            'time': elapsed_time,
+            'layer_stats': aggregated_layer_stats,
+            'summary_file': summary_file,
+            'analysis_samples': analysis_limit
+        }
+        
+    except Exception as e:
+        print(f"Fatal error in {bits}-bit {dataset_name}: {e}")
+        # Clean up on error
+        if 'model' in locals():
+            del model
+        if 'tokenizer' in locals():
+            del tokenizer
+        if analyzer:
+            analyzer.remove_hooks()
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        return {
+            'accuracy': 0.0,
+            'correct': 0,
+            'total': 0,
+            'errors': 1,
+            'time': 0,
+            'layer_stats': {},
+            'summary_file': None,
+            'analysis_samples': 0
+        }
 
 def process_batch_standard(model, tokenizer, batch_questions, dataset_name, batch_size=8):
     """Standard batch processing without layer analysis (faster)"""
@@ -548,243 +1022,6 @@ def process_batch_standard(model, tokenizer, batch_questions, dataset_name, batc
         print(f"Error processing batch: {e}")
         return [None] * len(batch_questions)
 
-def run_benchmark_with_quantization(questions_list, answers_list, num_samples, dataset_name, bits, batch_size=8, enable_layer_analysis=True):
-    """Run benchmark with specified quantization level, batch processing, and layer analysis"""
-    print(f"\nRunning {dataset_name} benchmark with {bits}-bit precision (batch size: {batch_size})...")
-    if enable_layer_analysis:
-        print("Layer-wise analysis: ENABLED")
-    start_time = time.time()
-    
-    model_name = "meta-llama/Llama-3.1-8B-Instruct"
-    
-    # Initialize comprehensive analyzer
-    analyzer = QuantizationAnalyzer(model_name, output_dir, timestamp) if enable_layer_analysis else None
-    
-    try:
-        # Configure quantization based on bits - simplified for CPU compatibility
-        print(f"Loading {model_name}...")
-        
-        # For CPU, always load without quantization and with auth token if available
-        print("⚠️  Loading model for CPU - quantization analysis simulated")
-        try:
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                torch_dtype=torch.float32,
-                low_cpu_mem_usage=True,
-                trust_remote_code=True
-            )
-        except Exception as auth_error:
-            print(f"⚠️  Auth token issue, trying without: {auth_error}")
-            # Try without auth token
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                torch_dtype=torch.float32,
-                low_cpu_mem_usage=True,
-                trust_remote_code=True
-            )
-        
-        print(f"Model loaded successfully")
-        
-        # Determine layer indices for analysis (strategic selection)
-        total_layers = len(model.model.layers)
-        layer_indices = [
-            0,                              # Input processing
-            total_layers // 8,              # Early reasoning (12.5%)
-            total_layers // 4,              # Question understanding (25%)
-            total_layers // 2,              # Core reasoning (50%)
-            3 * total_layers // 4,          # Answer synthesis (75%)
-            total_layers - 1                # Output generation (100%)
-        ]
-        
-        # Strategic attention head selection (often these heads specialize)
-        head_indices = [0, 4, 8, 12, 16, 20, 24, 28]  # Key reasoning heads
-        
-        print(f"Total layers: {total_layers}, analyzing layers: {layer_indices}")
-        print(f"Analyzing attention heads: {head_indices}")
-        
-        # Load tokenizer
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-        except Exception as e:
-            print(f"⚠️  Tokenizer loading issue: {e}")
-            # Fallback to a simpler approach
-            tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-        
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        
-        # Initialize counters and layer tracking
-        correct = 0
-        total = min(num_samples, len(questions_list)) if num_samples > 0 else len(questions_list)
-        errors = 0
-        layer_stats = defaultdict(list)  # Collect stats for each layer
-        
-        # Limit comprehensive analysis to first 50 samples for CPU compatibility
-        analysis_limit = min(50 if device == "cpu" else 100, total) if enable_layer_analysis else 0
-        
-        print(f"Processing {total} samples in batches of {batch_size}...")
-        print(f"Comprehensive analysis will be saved for first {analysis_limit} samples")
-        
-        # Process samples in batches
-        for i in range(0, total, batch_size):
-            batch_end = min(i + batch_size, total)
-            batch_questions = questions_list[i:batch_end]
-            batch_correct_answers = answers_list[i:batch_end] if i < len(answers_list) else [""] * len(batch_questions)
-            
-            try:
-                if enable_layer_analysis and i < analysis_limit:
-                    # Process batch with comprehensive analysis and data recording
-                    batch_generated_answers, comprehensive_analysis = process_batch_with_layers(
-                        model, tokenizer, batch_questions, dataset_name, layer_indices, head_indices, 
-                        batch_size, analyzer, i, bits
-                    )
-                    
-                    # Collect layer and attention statistics
-                    for sample_idx, stats in comprehensive_analysis.items():
-                        if 'layer_activations' in stats:
-                            for layer_idx, layer_data in stats['layer_activations'].items():
-                                layer_stats[layer_idx].append(layer_data)
-                        
-                else:
-                    # Process batch normally (faster)
-                    batch_generated_answers = process_batch_standard(model, tokenizer, batch_questions, dataset_name, batch_size)
-                
-                # Evaluate batch results
-                for j, (generated_answer, correct_answer) in enumerate(zip(batch_generated_answers, batch_correct_answers)):
-                    if generated_answer is None:
-                        errors += 1
-                        continue
-                    
-                    # Evaluate answer
-                    if dataset_name == "ARC":
-                        is_correct = evaluate_arc_answer(generated_answer, correct_answer)
-                    else:  # SVAMP
-                        is_correct = evaluate_svamp_answer(generated_answer, correct_answer)
-                    
-                    if is_correct:
-                        correct += 1
-                        
-            except Exception as batch_error:
-                errors += len(batch_questions)
-                if errors <= 5:  # Print first few batch errors
-                    print(f"Error processing batch {i//batch_size + 1}: {batch_error}")
-                continue
-            
-            # Progress updates
-            processed = min(batch_end, total)
-            if processed % (batch_size * 5) == 0 or processed == total:
-                current_acc = correct / processed if processed > 0 else 0
-                elapsed = time.time() - start_time
-                avg_time = elapsed / processed
-                eta = avg_time * (total - processed)
-                samples_per_sec = processed / elapsed if elapsed > 0 else 0
-                
-                print(f"Progress: {processed}/{total} ({processed/total*100:.1f}%) | "
-                      f"Accuracy: {current_acc:.3f} | "
-                      f"Errors: {errors} | "
-                      f"Speed: {samples_per_sec:.1f} samples/s | "
-                      f"ETA: {eta/60:.1f}m")
-        
-        # Calculate final results
-        accuracy = correct / total if total > 0 else 0.0
-        elapsed_time = time.time() - start_time
-        
-        # Save comprehensive experiment summary
-        experiment_summary = {
-            'timestamp': timestamp,
-            'dataset': dataset_name,
-            'bits': bits,
-            'model_name': model_name,
-            'device': device,
-            'total_samples': total,
-            'correct': correct,
-            'accuracy': accuracy,
-            'errors': errors,
-            'elapsed_time': elapsed_time,
-            'layer_indices': layer_indices,
-            'head_indices': head_indices,
-            'analysis_limit': analysis_limit,
-            'quantization_enabled': device != "cpu"
-        }
-        
-        summary_file = f"{output_dir}/experiment_summary_{dataset_name}_{bits}bit_{timestamp}.json"
-        with open(summary_file, 'w') as f:
-            json.dump(experiment_summary, f, indent=2)
-        print(f"Saved experiment summary to {summary_file}")
-        
-        # Aggregate comprehensive statistics
-        aggregated_layer_stats = {}
-        for layer_idx, stats_list in layer_stats.items():
-            if stats_list:
-                # Basic layer stats
-                layer_data = {
-                    'mean_activation': np.mean([s.get('mean_activation', 0) for s in stats_list]),
-                    'std_activation': np.mean([s.get('std_activation', 0) for s in stats_list]),
-                    'sparsity': np.mean([s.get('sparsity', 0) for s in stats_list]),
-                    'magnitude': np.mean([s.get('magnitude', 0) for s in stats_list]),
-                    'samples_analyzed': len(stats_list)
-                }
-                
-                aggregated_layer_stats[layer_idx] = layer_data
-        
-        print(f"\n{dataset_name} - {bits}-bit Results:")
-        print(f"  Total Samples: {total}")
-        print(f"  Correct: {correct}")
-        print(f"  Errors: {errors}")
-        print(f"  Accuracy: {accuracy:.4f}")
-        print(f"  Time: {elapsed_time/60:.2f} minutes")
-        print(f"  Avg Time/Sample: {elapsed_time/total:.2f}s")
-        print(f"  Samples/Second: {total/elapsed_time:.2f}")
-        print(f"  Comprehensive analysis saved for {analysis_limit} samples")
-        
-        # Cleanup analyzer
-        if analyzer:
-            analyzer.remove_hooks()
-        
-        # Memory cleanup
-        del model
-        del tokenizer
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            print(f"  GPU Memory Cleared")
-        else:
-            print(f"  CPU Memory Cleaned")
-            
-        return {
-            'accuracy': accuracy,
-            'correct': correct,
-            'total': total,
-            'errors': errors,
-            'time': elapsed_time,
-            'layer_stats': aggregated_layer_stats,
-            'summary_file': summary_file,
-            'analysis_samples': analysis_limit
-        }
-        
-    except Exception as e:
-        print(f"Fatal error in {bits}-bit {dataset_name}: {e}")
-        # Clean up on error
-        if 'model' in locals():
-            del model
-        if 'tokenizer' in locals():
-            del tokenizer
-        if analyzer:
-            analyzer.remove_hooks()
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        return {
-            'accuracy': 0.0,
-            'correct': 0,
-            'total': 0,
-            'errors': 1,
-            'time': 0,
-            'layer_stats': {},
-            'summary_file': None,
-            'analysis_samples': 0
-        }
-
 def print_layer_analysis(results_dict, dataset_name):
     """Print detailed layer and attention analysis comparison"""
     print(f"\n{dataset_name} Comprehensive Analysis:")
@@ -800,7 +1037,7 @@ def print_layer_analysis(results_dict, dataset_name):
     
     if not layer_data:
         print("No analysis data available.")
-        return []
+        return
     
     # Get all layer indices
     all_layers = set()
@@ -810,7 +1047,7 @@ def print_layer_analysis(results_dict, dataset_name):
     
     if not all_layers:
         print("No layer data found.")
-        return []
+        return
     
     # Print comprehensive comparison table
     print(f"{'Layer':<8} {'Bits':<6} {'Activation':<12} {'Sparsity':<10} {'Magnitude':<12} {'Samples':<8}")
@@ -825,6 +1062,31 @@ def print_layer_analysis(results_dict, dataset_name):
                       f"{stats['samples_analyzed']:<8}")
         print()  # Empty line between layers
     
+    # Calculate quantization impact metrics (changed from 8->4 to 4->2)
+    print("\nQuantization Impact Analysis:")
+    print("-"*80)
+    print(f"{'Layer':<8} {'Sparsity Δ':<12} {'Magnitude Δ':<14} {'Activation Δ':<14}")
+    print("-"*80)
+    
+    critical_layers = []
+    
+    for layer_idx in all_layers:
+        if (4 in layer_data and layer_idx in layer_data[4] and 
+            2 in layer_data and layer_idx in layer_data[2]):
+            
+            stats_4bit = layer_data[4][layer_idx]
+            stats_2bit = layer_data[2][layer_idx]
+            
+            sparsity_delta = stats_2bit['sparsity'] - stats_4bit['sparsity']
+            magnitude_delta = (stats_2bit['magnitude'] - stats_4bit['magnitude']) / stats_4bit['magnitude'] * 100 if stats_4bit['magnitude'] > 0 else 0
+            activation_delta = (stats_2bit['mean_activation'] - stats_4bit['mean_activation']) / abs(stats_4bit['mean_activation']) * 100 if stats_4bit['mean_activation'] != 0 else 0
+            
+            print(f"{layer_idx:<8} {sparsity_delta:+<12.3f} {magnitude_delta:+<14.1f}% {activation_delta:+<14.1f}%")
+            
+            # Identify critical layers for quantization strategy
+            if (abs(magnitude_delta) > 15 or abs(activation_delta) > 25 or abs(sparsity_delta) > 0.1):
+                critical_layers.append((layer_idx, abs(magnitude_delta) + abs(activation_delta)))
+    
     # Print analysis file locations
     print(f"\nDetailed Analysis Files:")
     for bits in bit_sizes:
@@ -832,28 +1094,33 @@ def print_layer_analysis(results_dict, dataset_name):
             print(f"  {bits}-bit summary: {results_dict[bits]['summary_file']}")
             print(f"  {bits}-bit samples analyzed: {results_dict[bits].get('analysis_samples', 0)}")
     
-    return []
+    return critical_layers
 
 # Main execution
 if __name__ == "__main__":
-    # Configuration - adapted for CPU/GPU compatibility  
-    bit_sizes = [4, 2] if device != "cpu" else [4]  # Skip 2-bit on CPU for compatibility
-    num_samples = 100 if device == "cpu" else 500  # Reduced for CPU testing
-    batch_size = 2 if device == "cpu" else 4       # Smaller batches for CPU
-    enable_layer_analysis = True  # Enable detailed layer analysis
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"\nUsing device: {device}")
     
-    if device == "cpu":
-        print("⚠️  CPU mode - reduced sample size and batch size for compatibility")
-        bit_sizes = [4]  # Only test 4-bit equivalent on CPU
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name()}")
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+    
+    # Configuration - changed from [8, 4] to [4, 2]
+    bit_sizes = [4, 2]
+    num_samples = 1000  # Reduced for comprehensive analysis
+    batch_size = 4      # Smaller batches for detailed recording
+    enable_layer_analysis = True  # Enable detailed layer analysis
     
     print(f"\nConfiguration:")
     print(f"- Bit sizes: {bit_sizes}")
     print(f"- Samples per test: {num_samples}")
     print(f"- Batch size: {batch_size}")
     print(f"- Layer analysis: {'ENABLED' if enable_layer_analysis else 'DISABLED'}")
+    print(f"- Output directory: {output_dir}")
+    print(f"- Timestamp: {timestamp}")
     print(f"- Total ARC-Easy samples available: {len(questions)}")
     print(f"- Total SVAMP samples available: {len(questions2)}")
-    print(f"- Comprehensive analysis will record first {50 if device == 'cpu' else 100} samples per test")
+    print(f"- Comprehensive analysis will record first 100 samples per test")
     
     # ARC Benchmarks
     print("\n" + "="*80)
@@ -898,7 +1165,6 @@ if __name__ == "__main__":
     # Create final comprehensive summary
     final_summary = {
         'timestamp': timestamp,
-        'device': device,
         'configuration': {
             'bit_sizes': bit_sizes,
             'num_samples': num_samples,
@@ -922,10 +1188,4 @@ if __name__ == "__main__":
     print(f"📁 All analysis data saved in: {output_dir}")
     print(f"📊 Final summary: {final_summary_file}")
     print(f"🔍 Individual sample analyses available for detailed quantization study")
-    print(f"💾 Total analysis files created: ~{len(bit_sizes) * (50 if device == 'cpu' else 100) * 2}")
-    print(f"🖥️  Device used: {device}")
-    
-    if device == "cpu":
-        print(f"⚠️  NOTE: Running on CPU - for faster GPU results, install CUDA-enabled PyTorch")
-    else:
-        print(f"🚀 GPU acceleration enabled - analysis complete!")
+    print(f"💾 Total analysis files created: ~{len(bit_sizes) * 200} (100 samples × 2 datasets × 2 bit levels)")
