@@ -44,4 +44,6 @@ I am thinking of using github blogs for this but probably won't. So I ran the ll
 
 Benchmarks were ok...
 
+# 21 July 2025
 
+I have a roadmap! I will be implementing multi AWQ managed models and they will be able to be quantized more agressively. I will then implement a lightweight classifier that will figure out pre determined categories(much later obv)
