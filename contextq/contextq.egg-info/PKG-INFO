@@ -1,0 +1,6 @@
+Metadata-Version: 2.1
+Name: contextq
+Version: 0.1
+Summary: ContextQ: Context Based adjustments for LLMs with attention and quantization
+Author: Ayan Jhunjhunwala
+Author-email: ayanqwerty@gmail.com
