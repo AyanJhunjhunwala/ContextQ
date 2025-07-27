@@ -28,3 +28,43 @@
     "time": "1.559",
     "fwd_time": "46.803"
 }
+{
+    "process": "gptq",
+    "layer": 0,
+    "module": "self_attn.o_proj",
+    "loss": "0.00025507",
+    "samples": "1024",
+    "damp": "0.01000",
+    "time": "1.613",
+    "fwd_time": "42.501"
+}
+{
+    "process": "gptq",
+    "layer": 0,
+    "module": "mlp.up_proj",
+    "loss": "0.23541892",
+    "samples": "1024",
+    "damp": "0.01000",
+    "time": "1.654",
+    "fwd_time": "45.466"
+}
+{
+    "process": "gptq",
+    "layer": 0,
+    "module": "mlp.gate_proj",
+    "loss": "0.28330541",
+    "samples": "1024",
+    "damp": "0.01000",
+    "time": "1.834",
+    "fwd_time": "45.466"
+}
+{
+    "process": "gptq",
+    "layer": 0,
+    "module": "mlp.down_proj",
+    "loss": "0.00130721",
+    "samples": "1024",
+    "damp": "0.01000",
+    "time": "30.266",
+    "fwd_time": "65.153"
+}
