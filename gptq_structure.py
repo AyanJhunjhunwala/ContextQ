@@ -1,52 +1,70 @@
-from gptqmodel import GPTQModel, QuantizeConfig
-from transformers import AutoTokenizer
-from datasets import load_dataset
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from optimum.gptq import GPTQQuantizer
 import torch
 import os
 
-model_id = "meta-llama/Llama-3.1-8B"
-quant_path = "Quantized_Llama-3.1-8B"
+model_name = "facebook/opt-125m"
 
 if __name__ == "__main__":
     print(f"CUDA available: {torch.cuda.is_available()}")
-    if torch.cuda.is_available():
-        print(f"CUDA device name: {torch.cuda.get_device_name(0)}")
-
-    if not os.path.exists(quant_path):
-        print(f"Quantizing '{model_id}'...")
-
-        print("Loading calibration dataset 'allenai/c4'...")
-        calibration_dataset = load_dataset(
-            "allenai/c4",
-            data_files="en/c4-train.00001-of-01024.json.gz",
-            split="train"
-        ).select(range(1024))["text"]
-
-        quant_config = QuantizeConfig(bits=4, group_size=128)
-
-        print("Loading base model...")
-        model = GPTQModel.load(model_id, quant_config,trust_remote_code=True)
-
-        print("Starting quantization... this may take a while.")
-        model.quantize(calibration_dataset, batch_size=1) 
-        print("Quantization complete.")
-
-        model.save(quant_path)
+    
+    if os.path.exists("opt-125m-gptq"):
+        print("Loading quantized model...")
+        model = AutoModelForCausalLM.from_pretrained(
+            "opt-125m-gptq",
+            torch_dtype=torch.float16,
+            device_map="auto"
+        )
+        tokenizer = AutoTokenizer.from_pretrained("opt-125m-gptq")
         
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokenizer.save_pretrained(quant_path)
-        print(f"Model and tokenizer saved to '{quant_path}'")
-
-    print(f"\nLoading quantized model from '{quant_path}' for inference...")
-    tokenizer = AutoTokenizer.from_pretrained(quant_path)
-    
-    model = GPTQModel.load(quant_path, device_map="auto", trust_remote_code=True)
-
-    print("Running example inference... 🤖")
-    prompt = "The capital of France is"
-    
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    outputs = model.generate(**inputs, max_new_tokens=50, temperature=0.7)
-    
-    print(f"\nPrompt: {prompt}")
-    print(f"Response: {tokenizer.decode(outputs[0], skip_special_tokens=True)}")
+        input_text = "The future of AI is"
+        inputs = tokenizer(input_text, return_tensors="pt")
+        if torch.cuda.is_available():
+            inputs = {k: v.to("cuda") for k, v in inputs.items()}
+            
+        outputs = model.generate(**inputs, max_new_tokens=50, do_sample=True)
+        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        print(f"Generated: {response}")
+        
+    else:
+        print("Loading original model...")
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16,
+            device_map="auto"
+        )
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        
+        calibration_texts = [
+            "The quick brown fox jumps over the lazy dog.",
+            "Machine learning is a subset of artificial intelligence.",
+            "Python is a popular programming language for data science.",
+            "Neural networks are inspired by biological neural networks.",
+            "Deep learning has revolutionized computer vision and NLP."
+        ]
+        
+        print("Creating quantizer...")
+        quantizer = GPTQQuantizer(
+            bits=4,
+            dataset=calibration_texts,
+            block_name_to_quantize="model.decoder.layers", 
+            model_seqlen=512
+        )
+        
+        print("Quantizing model...")
+        quantized_model = quantizer.quantize_model(model, tokenizer)
+        
+        print("Saving quantized model...")
+        quantized_model.save_pretrained("opt-125m-gptq")
+        tokenizer.save_pretrained("opt-125m-gptq")
+        
+        print("Quantization complete!")
+        
+        input_text = "The future of AI is"
+        inputs = tokenizer(input_text, return_tensors="pt")
+        if torch.cuda.is_available():
+            inputs = {k: v.to("cuda") for k, v in inputs.items()}
+            
+        outputs = quantized_model.generate(**inputs, max_new_tokens=50, do_sample=True)
+        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        print(f"Generated: {response}")
