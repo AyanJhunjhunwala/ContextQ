@@ -1,8 +1,7 @@
 setup.py
-contextq/__init__.py
-contextq/main.py
 contextq.egg-info/PKG-INFO
 contextq.egg-info/SOURCES.txt
 contextq.egg-info/dependency_links.txt
+contextq.egg-info/entry_points.txt
 contextq.egg-info/requires.txt
 contextq.egg-info/top_level.txt

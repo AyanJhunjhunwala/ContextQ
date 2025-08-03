@@ -1,5 +1,8 @@
 .env
-.json
+*.json
+*.txt
+*.bin
+hf_cache/
 
 contextq/.pypric
 __pycache__/
@@ -28,7 +31,7 @@ venv/
 env/
 ENV/
 
-.safetensors
+*.safetensors
 # IDE
 .vscode/
 .idea/
