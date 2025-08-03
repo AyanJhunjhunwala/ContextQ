@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="contextq",
-    version="0.1.1",
+    version="0.1.2",
     description="ContextQ: Context Based adjustments for LLMs with attention and quantization",
     author="Ayan Jhunjhunwala",
     author_email="ayanqwerty@gmail.com",
