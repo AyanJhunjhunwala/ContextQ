@@ -1,12 +1,5 @@
 # Context-Aware Model Wrapper for Selective Quantization/Pruning and editing Attention Patterns
 
-What I am currently doing (this may kinda read like a blog, I apologize in advance).
-
-Benchmarking qualitative vs quantitative questions and seeing average gradient magnitudes.
-This will hopefully allow me to quantize seemingly non important layers as I go on.
-
-![fig1](https://github.com/AyanJhunjhunwala/ContextQ/blob/main/Figure_1.png "Initial Finding")
-
 # Is the wrapper out? -> Yes!
 # pip install contextq
 give it a try
@@ -24,6 +17,7 @@ run selective_gpt --help for help!
 
 The attention patterns and gradient magnitude are obviously pretty different for quant/qual in dialo-small. I am planning to test this with a larger model. I tested out dialo with the ARC and GSM8k test. (below)
 
+![fig1](https://github.com/AyanJhunjhunwala/ContextQ/blob/main/Figure_1.png "Initial Finding")
 ![fig2](https://github.com/AyanJhunjhunwala/ContextQ/blob/main/Figure_2.png)
 
 
