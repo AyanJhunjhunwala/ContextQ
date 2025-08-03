@@ -7,28 +7,18 @@ This will hopefully allow me to quantize seemingly non important layers as I go 
 
 ![fig1](https://github.com/AyanJhunjhunwala/ContextQ/blob/main/Figure_1.png "Initial Finding")
 
-# Is the wrapper out? -> No
+# Is the wrapper out? -> Yes!
+# pip install contextq
+give it a try
+# Update : August 2nd
+The wrapper is out!
+Gradient-aware (importance-driven) 4-bit quantization workflow for any causal-LM on Hugging Face, defaulting to Llama-3.2-1B-Instruct.
 
-# Observations
+I am finishing this up on a late Saturday so I do have some messy code in there, but I will clean it up.
+Currently, it calibrates on wikitexts only, I plan to allow any custom HGF dataset soon. bf16->4 with atleast 50% of layers being quantized and from full precision to multi precision(32,16,8,4) and I will try 3-2 bit quant as well in the future.
 
-Very initial but we see that atleast for the DiaboGPT-small model, the gradient mags are much more condensed for non reasoning and non open ended questions when compared to mathematical ones(simple questions)
+run selective_gpt --help for help!
 
-
-# Use case
-
-1. When thinking of strctured outputs from LLMs, and repetitve requests for generation, we can run context analysis and see gradients and their magnitudes. Using this, we can have layers quantized on requests.
-
-2. We end up doing this anyway on the daily for models
-
-
-# More thoughts
-
-This is an extremely long project and I hope to be done with a prototype soon and continue working on it as long as I can. 
-
-
-# Day by Day
-
-This is just me keeping up with any progress I made.
 
 # 13th July 2025
 
@@ -36,8 +26,8 @@ The attention patterns and gradient magnitude are obviously pretty different for
 
 ![fig2](https://github.com/AyanJhunjhunwala/ContextQ/blob/main/Figure_2.png)
 
-I am going to switch over to llama 3.1 and benchmark 8-4 bit next. I am also going to work on attention patterns and quant strutcures for both quant/qual. This means a lot of reading for me :( 
 
+The wrapper is officially out, all it does right now is quantize 
 # 17th July 2025
 
 I am thinking of using github blogs for this but probably won't. So I ran the llama 3.1 8b instruct on ARC and svamp to split qualitative and quantitative and now my biggest question is how do I modify patterns and quantize the models to make this make sense. Svamp had a low accuracy and optmizing that without SFT would be something I guess. I started figruing out the pypi library as well but my main focus would have to be on extrapolating 
