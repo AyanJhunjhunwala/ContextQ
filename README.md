@@ -17,8 +17,6 @@ run selective_gpt --help for help!
 
 The attention patterns and gradient magnitude are obviously pretty different for quant/qual in dialo-small. I am planning to test this with a larger model. I tested out dialo with the ARC and GSM8k test. (below)
 
-![fig1](https://github.com/AyanJhunjhunwala/ContextQ/blob/main/Figure_1.png "Initial Finding")
-![fig2](https://github.com/AyanJhunjhunwala/ContextQ/blob/main/Figure_2.png)
 
 
 The wrapper is officially out, all it does right now is quantize 
