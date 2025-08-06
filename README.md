@@ -1,4 +1,4 @@
-# Context-Aware Model Wrapper
+# Context-Aware Model Library for Layerwise Quantization
 
 *Selective quantization / pruning & attention pattern editing for causal LMs*
 
