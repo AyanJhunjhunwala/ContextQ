@@ -1,3 +1,3 @@
-from .main import SelectiveGPTQuantizer, main
+from .main import AutoAWQProfileQuantizer, main
 
-__all__ = ["SelectiveGPTQuantizer", "main"]
+__all__ = ["AutoAWQProfileQuantizer", "main"]
