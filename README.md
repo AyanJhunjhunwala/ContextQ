@@ -1,6 +1,6 @@
 # Context-Aware Model Library for Layerwise Quantization
 
-*Selective quantization / pruning & attention pattern editing for causal LMs*
+*Selective quantization using AWQ, context manager for specific models
 
 ## Installation
 
