@@ -1,4 +1,4 @@
-# Context-Aware Model Library for Layerwise Quantization
+# Context-Aware Model Library for LLM Quantization
 
 *Selective quantization using AWQ, context manager for specific models
 
@@ -11,7 +11,8 @@ pip install contextq
 ## Current Status
 
 * **Release:** Available on PyPI – give it a try.
-* **Last update:** **August 2, 2025**
+* **Last update:** **Sep 13, 2025**
+* This runs perfectly now on AWQ. Just give the wrapper your model name and it will ask you options from Quantitative, Qualitative, Reasoning, Code for task specific quantization.
 
 ## Key Features
 
@@ -19,6 +20,7 @@ pip install contextq
 * Calibration on **WikiText** (custom HF dataset support coming soon).
 * Supports bf16 → 4‑bit with at least 50 % of layers quantized.
 * Experimental mixed‑precision pipeline (32 / 16 / 8 / 4 bit); 3‑2 bit quantization planned.
+* Adds Quantization profiles for different types of context quant. Less than 1% loss and super easy
 
 ## Quick Start
 
