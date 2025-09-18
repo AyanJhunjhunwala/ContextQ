@@ -8,7 +8,7 @@ setup(
     author_email="ayanqwerty@gmail.com",
     packages=find_packages(),
     install_requires=[
-        "torch",
+        "torch=="2.7.1,
         "transformers>=4.51",
         "datasets",
         "accelerate",
