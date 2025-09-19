@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="contextq",
-    version="0.1.4",
+    version="0.1.5",
     description="ContextQ: Activation aware LLM Quantization, Make any LLM stick to your tasks",
     author="Ayan Jhunjhunwala",
     author_email="ayanqwerty@gmail.com",
@@ -12,7 +12,7 @@ setup(
         "transformers>=4.51",
         "datasets",
         "accelerate",
-        "awq"
+        "autoawq"
         
     ],
     entry_points={
