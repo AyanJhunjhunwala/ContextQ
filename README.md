@@ -7,6 +7,45 @@
 ```bash
 pip install contextq
 ```
+```python
+import contextq
+from awq import AutoAWQForCausalLM
+from transformers import AutoTokenizer
+
+quantizer = contextq.SelectiveGPTQuantizer("meta-llama/Llama-3.1-8B-Instruct", "code")
+quant_dir = "./hf_cache/awq_quantized_tmp"
+tok = AutoTokenizer.from_pretrained(quant_dir, trust_remote_code=True)
+
+if tok.pad_token is None:
+    tok.pad_token = tok.eos_token
+
+model = AutoAWQForCausalLM.from_quantized(
+    quant_dir,
+    trust_remote_code=True,
+    low_cpu_mem_usage=True,
+    device_map="cuda" if torch.cuda.is_available() else "auto",
+    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+)
+```
+## VLLM Support
+
+```python
+from vllm import LLM, SamplingParams
+
+model_path = "./hf_cache/awq_quantized_tmp"
+
+llm = LLM(
+    model=model_path,
+    quantization="awq",   
+    dtype="auto",        
+    trust_remote_code=True
+)
+
+sampler = SamplingParams(max_tokens=128, temperature=0.8, top_p=0.95)
+outputs = llm.generate(["Explain attention like I'm five."], sampler)
+print(outputs[0].outputs[0].text)
+
+```
 
 ## Current Status
 
